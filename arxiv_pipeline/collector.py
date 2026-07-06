@@ -136,16 +136,16 @@ def fetch_by_date_range_chunked(
     (arXiv 서버 쪽 제약, 라이브러리 버그 아님). 그래서 긴 기간을 한 번에 조회하면
     카테고리 3개 x 몇 달치처럼 결과가 많을 때 쉽게 이 한도에 걸린다.
 
-    이 함수는 전체 기간을 chunk_days 단위 창으로 쪼개서 순서대로 조회하고,
-    각 창의 결과를 (window_start, window_end, papers) 튜플로 하나씩 yield한다.
-    창 하나의 결과가 10,000건을 넘는 일은 거의 없다.
+    이 함수는 전체 기간을 chunk_days 단위 창으로 쪼개서 **start부터 시간순으로**
+    조회하고, 각 창의 결과를 (window_start, window_end, papers) 튜플로 하나씩
+    yield한다. 창 하나의 결과가 10,000건을 넘는 일은 거의 없다.
     """
-    window_end = end
-    while window_end > start:
-        window_start = max(start, window_end - timedelta(days=chunk_days))
+    window_start = start
+    while window_start < end:
+        window_end = min(end, window_start + timedelta(days=chunk_days))
         papers = list(fetch_by_date_range(window_start, window_end, categories))
         yield window_start, window_end, papers
-        window_end = window_start
+        window_start = window_end
 
 
 if __name__ == "__main__":
