@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-from collector import fetch_by_date_range
+from collector import fetch_by_date_range_chunked
 from preprocess import dedupe_raw_papers
 
 try:
@@ -52,21 +52,9 @@ def _to_payload(p):
     }
 
 
-def collect_and_push(days: int, categories: list):
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(days=days)
-
-    print(f"arXiv 조회 중... (최근 {days}일, {categories})")
-    raw_papers = list(fetch_by_date_range(start, end, categories))
-    print(f"조회됨: {len(raw_papers)}건 (중복 제거 전)")
-
-    deduped = dedupe_raw_papers(raw_papers)
-    print(f"중복 제거 후: {len(deduped)}건. 서버로 전송 시작 ({API_BASE})")
-
-    total_changed = 0
-    total_embedded = 0
-    for i in range(0, len(deduped), BATCH_SIZE):
-        chunk = deduped[i : i + BATCH_SIZE]
+def _push_batch(papers, total_changed, total_embedded, batch_label):
+    for i in range(0, len(papers), BATCH_SIZE):
+        chunk = papers[i : i + BATCH_SIZE]
         payload = {"papers": [_to_payload(p) for p in chunk], "auto_embed": True}
 
         resp = requests.post(
@@ -77,8 +65,37 @@ def collect_and_push(days: int, categories: list):
         total_changed += result["ingested_or_updated"]
         total_embedded += result["newly_embedded"]
         print(
-            f"  배치 {i // BATCH_SIZE + 1}: 신규/갱신 {result['ingested_or_updated']}건, "
-            f"임베딩 {result['newly_embedded']}건"
+            f"  {batch_label} 배치 {i // BATCH_SIZE + 1}: "
+            f"신규/갱신 {result['ingested_or_updated']}건, 임베딩 {result['newly_embedded']}건"
+        )
+    return total_changed, total_embedded
+
+
+def collect_and_push(days: int, categories: list, chunk_days: int = 7):
+    """
+    arXiv API는 한 쿼리의 페이지네이션이 약 10,000건을 넘어가면 HTTP 500을 낸다
+    (arXiv 서버 쪽 제약). collector.fetch_by_date_range_chunked가 전체 기간을
+    chunk_days 단위 창으로 쪼개서 순서대로 조회해주므로, 여기서는 창마다
+    중복 제거 + 서버 전송만 하면 된다.
+    """
+    end = datetime.now(timezone.utc)
+    overall_start = end - timedelta(days=days)
+
+    total_changed = 0
+    total_embedded = 0
+    window_no = 0
+
+    for window_start, window_end, raw_papers in fetch_by_date_range_chunked(
+        overall_start, end, categories, chunk_days=chunk_days
+    ):
+        window_no += 1
+        label = f"{window_start.date()}~{window_end.date()}"
+
+        deduped = dedupe_raw_papers(raw_papers)
+        print(f"[{window_no}] {label}: 조회 {len(raw_papers)}건 -> 중복 제거 후 {len(deduped)}건, 전송 시작")
+
+        total_changed, total_embedded = _push_batch(
+            deduped, total_changed, total_embedded, f"[{window_no}] {label}"
         )
 
     print(f"완료: 총 신규/갱신 {total_changed}건, 임베딩 {total_embedded}건")
@@ -93,5 +110,11 @@ if __name__ == "__main__":
         "--categories", nargs="+", default=["cs.RO", "cs.CV", "cs.CL"],
         help="수집할 카테고리 목록 (기본: cs.RO cs.CV cs.CL)",
     )
+    parser.add_argument(
+        "--chunk-days", type=int, default=7,
+        help="한 번의 arXiv 쿼리로 조회할 기간 단위 (기본 7일). "
+             "결과가 너무 많으면(약 10,000건↑) arXiv API가 500 에러를 내므로, "
+             "긴 기간을 수집할 땐 이 값을 줄이세요 (예: 3).",
+    )
     args = parser.parse_args()
-    collect_and_push(args.days, args.categories)
+    collect_and_push(args.days, args.categories, args.chunk_days)

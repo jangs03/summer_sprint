@@ -44,6 +44,28 @@ cp local_config.example.py local_config.py   # Windows: copy local_config.exampl
 
 ---
 
+## 빠른 명령어 참고
+
+| 스크립트 | 실행 위치 | 명령어 | 용도 |
+|---|---|---|---|
+| `main.py` | EC2 서버 | `python main.py --backfill 3` (최초 1회) / `python main.py --daily` (매일, cron 등록) | 서버가 직접 arXiv 수집 + 임베딩까지 한 번에 |
+| `app.py` | EC2 서버 | `python -m uvicorn app:app --host 0.0.0.0 --port 8000` | 팀 공유 API 서버 실행 (tmux 안에서 띄워두기) |
+| `client_example.py` | 본인/팀원 PC | `local_config.py` 준비 후 `from client_example import search` 로 import해서 사용 | 관심사 프로필로 논문 검색/조회 |
+| `collect_and_push.py` | 본인/팀원 PC | `python collect_and_push.py --days 7` | 본인 컴퓨터에서 arXiv 수집 후 공유 DB에 반영 |
+| `sqlite3 data/papers.db` | EC2 서버 (SSH 접속 후) | `sqlite3 data/papers.db` 진입 후 SQL 직접 실행 | DB 내용 직접 확인/디버깅 |
+
+**자주 쓰는 확인 명령:**
+
+| 목적 | 명령어 |
+|---|---|
+| 서버 살아있는지 확인 | `curl http://13.48.130.182:8000/health` (또는 브라우저) |
+| tmux 세션 재접속 | `tmux attach -t server` |
+| tmux에서 빠져나오기(유지) | `Ctrl+B` 뗀 다음 `D` |
+| EC2 접속 | `ssh -i ~/summer_sprint.pem ubuntu@13.48.130.182` |
+| 최신 코드 반영 | EC2에서 `git pull` 후 uvicorn 재시작 |
+
+---
+
 ## 전체 구조
 
 ```

@@ -14,9 +14,9 @@
 
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from collector import fetch_recent_months, fetch_since
+from collector import fetch_by_date_range_chunked, fetch_since
 from config import LAST_RUN_PATH
 from db import init_db, get_conn, upsert_paper, count_papers, PaperRecord
 from preprocess import clean_abstract, dedupe_raw_papers
@@ -28,8 +28,6 @@ def _load_last_run() -> datetime:
         data = json.loads(LAST_RUN_PATH.read_text())
         return datetime.fromisoformat(data["last_run"])
     # 파일이 없으면 기본값: 하루 전
-    from datetime import timedelta
-
     return datetime.now(timezone.utc) - timedelta(days=1)
 
 
@@ -66,15 +64,26 @@ def _ingest(raw_papers) -> int:
 
 
 def run_backfill(months: int, skip_embedding: bool):
-    print(f"[backfill] 최근 {months}개월치 수집 시작...")
-    raw_papers = list(fetch_recent_months(months=months))
-    print(f"[backfill] arXiv API로 {len(raw_papers)}건 조회됨 (중복 제거 전)")
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=30 * months)
+    print(f"[backfill] 최근 {months}개월치 수집 시작... ({start.date()} ~ {end.date()})")
 
-    changed = _ingest(raw_papers)
-    print(f"[backfill] DB에 신규/갱신 {changed}건 저장. 총 보유 논문 수: ")
+    # arXiv API는 한 쿼리 결과가 너무 많으면(약 10,000건↑) HTTP 500을 내므로,
+    # 7일 단위 창으로 쪼개서 순차 조회 + 즉시 DB 반영한다 (창별로 진행 상황 출력).
+    total_changed = 0
+    for window_start, window_end, raw_papers in fetch_by_date_range_chunked(
+        start, end, chunk_days=7
+    ):
+        label = f"{window_start.date()}~{window_end.date()}"
+        changed = _ingest(raw_papers)
+        total_changed += changed
+        print(
+            f"[backfill] [{label}] arXiv 조회 {len(raw_papers)}건 -> "
+            f"신규/갱신 {changed}건 저장"
+        )
 
     with get_conn() as conn:
-        print(f"[backfill] 총 {count_papers(conn)}건")
+        print(f"[backfill] 총 신규/갱신 {total_changed}건. 전체 보유 논문 수: {count_papers(conn)}건")
 
     if not skip_embedding:
         n = embed_pending_papers()
